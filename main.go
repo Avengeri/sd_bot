@@ -1,1 +1,7 @@
-package sd_bot
+package main
+
+import "fmt"
+
+func main() {
+	fmt.Println("aaa")
+}
