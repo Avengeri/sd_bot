@@ -1,94 +1,178 @@
 package main
 
 import (
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
+	"bytes"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"github.com/go-telegram-bot-api/telegram-bot-api"
 	"log"
 	"net/http"
+	"os"
 )
 
-func main() {
+const telegramToken = "8057819715:AAHbLvhxrvhldtyQAS2y7vFzqH_GflyO0nI"
 
-	//if err := godotenv.Load("./.env"); err != nil {
-	//	log.Fatalf("error loading environment variable: %s", err.Error())
-	//}
+func generateImage(prompt string) (string, error) {
+	url := "http://localhost:7860/sdapi/v1/txt2img"
 
-	//db, err := postgres.NewPostgresDB(postgres.Config{
-	//	Host:     os.Getenv("DB_HOST"),
-	//	Port:     os.Getenv("DB_PORT"),
-	//	Username: os.Getenv("DB_USER"),
-	//	DBName:   os.Getenv("DB_NAME"),
-	//	SSLMode:  os.Getenv("DB_SSLMODE"),
-	//	Password: os.Getenv("DB_PASSWORD"),
-	//})
-	//if err != nil {
-	//	log.Fatalf("Postgres creation error: %s", err.Error())
-	//}
-	//ok, err := postgres.CheckDBConn(db)
-	//if err != nil {
-	//	log.Fatalf("Connection to the database could not be established: %s", err.Error())
-	//}
-	//fmt.Println(ok)
-
-	//repo := repository.NewStorageUserPostgres(db)
-	//service := service2.NewUserService(repo)
-	//fmt.Println(service)
-
-	bot, err := tgbotapi.NewBotAPI("8057819715:AAHbLvhxrvhldtyQAS2y7vFzqH_GflyO0nI")
-	if err != nil {
-		log.Fatalf("Connection to BOT API failed: %s", err.Error())
+	// Формируем данные для запроса
+	requestBody := map[string]interface{}{
+		"prompt":              prompt,
+		"width":               512,
+		"height":              512,
+		"num_inference_steps": 50,
 	}
-	bot.Debug = true
 
-	log.Printf("Authorized on account %s", bot.Self.UserName)
+	// Преобразуем запрос в JSON
+	jsonData, err := json.Marshal(requestBody)
+	if err != nil {
+		log.Printf("Ошибка при маршалинге данных: %v", err)
+		return "", err
+	}
 
+	// Отправляем POST запрос на сервер
+	resp, err := http.Post(url, "application/json", bytes.NewBuffer(jsonData))
+	if err != nil {
+		log.Printf("Ошибка при отправке запроса: %v", err)
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	// Проверяем код ответа
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("Ошибка ответа от сервера: %v", resp.Status)
+		return "", fmt.Errorf("Ошибка ответа от сервера: %v", resp.Status)
+	}
+
+	// Читаем и декодируем ответ
+	var response map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		log.Printf("Ошибка при декодировании ответа: %v", err)
+		return "", err
+	}
+
+	// Логируем полученный ответ для диагностики
+	log.Printf("Ответ от сервера: %v", response)
+
+	// Проверяем наличие данных "images"
+	images, ok := response["images"].([]interface{})
+	if !ok {
+		log.Printf("Не удалось извлечь изображения из ответа: %v", response["images"])
+		return "", fmt.Errorf("Не удалось извлечь изображения из ответа")
+	}
+
+	// Если изображение найдено, возвращаем base64 строку изображения
+	if len(images) > 0 {
+		imageData, ok := images[0].(string)
+		if !ok {
+			log.Printf("Ошибка при преобразовании изображения: %v", images[0])
+			return "", fmt.Errorf("Ошибка при преобразовании изображения")
+		}
+		return imageData, nil
+	}
+
+	// Если изображений нет, возвращаем ошибку
+	log.Println("Изображение не было сгенерировано.")
+	return "", fmt.Errorf("Изображение не было сгенерировано")
+}
+
+func main() {
+	// Настроим логирование
+	logFile, err := os.OpenFile("bot.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		log.Fatalf("Не удалось открыть лог-файл: %v", err)
+	}
+	defer logFile.Close()
+
+	// Создаем логгер, который будет записывать в файл и выводить в консоль
+	multiLogger := log.New(os.Stdout, "", log.LstdFlags)
+	log.SetOutput(logFile)           // Устанавливаем вывод в файл
+	multiLogger.SetOutput(os.Stdout) // Устанавливаем вывод в консоль
+
+	// Создаем нового бота
+	bot, err := tgbotapi.NewBotAPI(telegramToken)
+	if err != nil {
+		multiLogger.Fatalf("Не удалось авторизовать бота: %v", err)
+	}
+	multiLogger.Printf("Авторизован как %s", bot.Self.UserName)
+
+	// Получаем обновления от бота
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
-
 	updates, err := bot.GetUpdatesChan(u)
 	if err != nil {
-		log.Fatalf("Could not get updates from chan: %s", err.Error())
+		multiLogger.Fatalf("Не удалось получить обновления от бота: %v", err)
 	}
+
+	// Создаем клавиатуру с кнопкой "Сгенерировать машину"
+	button := tgbotapi.NewInlineKeyboardButtonData("Сгенерировать машину", "generate_car")
+	keyboard := tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(button),
+	)
 
 	for update := range updates {
-		if update.Message != nil { // Если получено сообщение
-			handleMessage(bot, &update)
-		} else if update.CallbackQuery != nil { // Если нажата кнопка
-			handleButtonPress(bot, update.CallbackQuery)
+		// Обрабатываем обычные сообщения
+		if update.Message != nil && update.Message.IsCommand() {
+			if update.Message.Command() == "start" {
+				multiLogger.Printf("Пользователь %s начал чат с ботом", update.Message.From.UserName)
+
+				// Отправляем кнопку с командой "Сгенерировать машину"
+				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Нажмите кнопку для генерации машины!")
+				msg.ReplyMarkup = keyboard
+				bot.Send(msg)
+			}
+		}
+
+		// Обрабатываем нажатие на кнопку
+		if update.CallbackQuery != nil {
+			multiLogger.Printf("Пользователь %s нажал на кнопку: %s", update.CallbackQuery.From.UserName, update.CallbackQuery.Data)
+
+			if update.CallbackQuery.Data == "generate_car" {
+				// Генерируем изображение
+				multiLogger.Println("Запрос на генерацию изображения: красная машина")
+				imgData, err := generateImage("A red car") // Пример промпта
+				if err != nil {
+					bot.Send(tgbotapi.NewMessage(update.CallbackQuery.Message.Chat.ID, "Ошибка при генерации изображения"))
+					multiLogger.Printf("Ошибка при генерации изображения: %v", err)
+					continue
+				}
+
+				// Логируем base64 данные для диагностики
+				multiLogger.Printf("Полученные base64 данные изображения: %s", imgData)
+
+				// Декодируем base64 строку изображения
+				decodedImage, err := base64.StdEncoding.DecodeString(imgData)
+				if err != nil {
+					bot.Send(tgbotapi.NewMessage(update.CallbackQuery.Message.Chat.ID, "Ошибка при декодировании изображения"))
+					multiLogger.Printf("Ошибка при декодировании изображения: %v", err)
+					continue
+				}
+
+				// Сохраняем изображение во временный файл
+				tmpFile, err := os.CreateTemp("", "generated_image_*.png")
+				if err != nil {
+					bot.Send(tgbotapi.NewMessage(update.CallbackQuery.Message.Chat.ID, "Ошибка при создании файла"))
+					multiLogger.Printf("Ошибка при создании файла: %v", err)
+					continue
+				}
+				defer tmpFile.Close()
+
+				if _, err := tmpFile.Write(decodedImage); err != nil {
+					bot.Send(tgbotapi.NewMessage(update.CallbackQuery.Message.Chat.ID, "Ошибка при записи изображения"))
+					multiLogger.Printf("Ошибка при записи изображения: %v", err)
+					continue
+				}
+
+				// Отправляем изображение как файл
+				photo := tgbotapi.NewPhotoUpload(update.CallbackQuery.Message.Chat.ID, tmpFile.Name())
+				bot.Send(photo)
+
+				// Ответ на нажатие кнопки
+				callback := tgbotapi.NewCallback(update.CallbackQuery.ID, "Генерация завершена!")
+				bot.AnswerCallbackQuery(callback)
+				multiLogger.Println("Изображение отправлено пользователю.")
+			}
 		}
 	}
-}
-
-// Обработка текстовых сообщений
-func handleMessage(bot *tgbotapi.BotAPI, update *tgbotapi.Update) {
-	// Отправляем сообщение с кнопкой
-	button := tgbotapi.NewInlineKeyboardButtonData("Сгенерировать машинку", "send_request")
-	row := tgbotapi.NewInlineKeyboardRow(button)
-	keyboard := tgbotapi.NewInlineKeyboardMarkup(row)
-
-	msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Сгенерируем картинку?")
-	msg.ReplyMarkup = keyboard
-	if _, err := bot.Send(msg); err != nil {
-		log.Printf("Failed to send message: %s", err.Error())
-	}
-}
-
-// Обработка нажатия кнопки
-func handleButtonPress(bot *tgbotapi.BotAPI, callback *tgbotapi.CallbackQuery) {
-	if callback.Data == "send_request" {
-		// Отправляем запрос на внешний сервис
-		resp, err := http.Get("https://jsonplaceholder.typicode.com/posts/1") // Замените на нужный URL
-		if err != nil {
-			log.Printf("Failed to send request: %s", err.Error())
-			_, _ = bot.Send(tgbotapi.NewMessage(callback.Message.Chat.ID, "Ошибка отправки запроса."))
-			return
-		}
-		defer resp.Body.Close()
-
-		// Ответ пользователю
-		reply := tgbotapi.NewMessage(callback.Message.Chat.ID, "Запрос отправлен успешно!")
-		_, _ = bot.Send(reply)
-	}
-
-	// Уведомление Telegram о завершении обработки кнопки
-	bot.AnswerCallbackQuery(tgbotapi.NewCallback(callback.ID, "Запрос обрабатывается..."))
 }
