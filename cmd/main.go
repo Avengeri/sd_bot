@@ -18,10 +18,13 @@ func generateImage(prompt string) (string, error) {
 
 	// Формируем данные для запроса
 	requestBody := map[string]interface{}{
+		"negative_prompt":     "Low quality, nude",
+		"sampler_name":        "Euler a",
 		"prompt":              prompt,
 		"width":               512,
-		"height":              512,
+		"height":              768,
 		"num_inference_steps": 50,
+		"cfg_scale":           12,
 	}
 
 	// Преобразуем запрос в JSON
@@ -106,7 +109,7 @@ func main() {
 	}
 
 	// Создаем клавиатуру с кнопкой "Сгенерировать машину"
-	button := tgbotapi.NewInlineKeyboardButtonData("Сгенерировать машину", "generate_car")
+	button := tgbotapi.NewInlineKeyboardButtonData("Сгенерировать девушку", "generate_car")
 	keyboard := tgbotapi.NewInlineKeyboardMarkup(
 		tgbotapi.NewInlineKeyboardRow(button),
 	)
@@ -131,7 +134,7 @@ func main() {
 			if update.CallbackQuery.Data == "generate_car" {
 				// Генерируем изображение
 				multiLogger.Println("Запрос на генерацию изображения: красная машина")
-				imgData, err := generateImage("A red car") // Пример промпта
+				imgData, err := generateImage("beautiful woman") // Пример промпта
 				if err != nil {
 					bot.Send(tgbotapi.NewMessage(update.CallbackQuery.Message.Chat.ID, "Ошибка при генерации изображения"))
 					multiLogger.Printf("Ошибка при генерации изображения: %v", err)
